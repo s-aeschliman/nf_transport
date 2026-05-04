@@ -1,6 +1,6 @@
 import torch
 from database_process import ChoiceDataset
-from logpd import PosteriorDensity
+from logpd import LogJointDensity
 from parameter import ChoiceParameter
 from torch.distributions import (
     Bernoulli,
@@ -10,12 +10,17 @@ from torch.distributions import (
     Normal,
     Uniform,
 )
+from torch.optim import optimizer
 from torch.utils.data import DataLoader, Dataset
 from utility import ChoiceUtility
 
+from nf_transport.choice_models.database_process import MultinomialChoiceData
+from nf_transport.choice_models.logpd import ChoiceModelLogJoint
+from nf_transport.choice_models.nfvi import NFVI, PlanarFlow, PlanarTransform
+
 
 def test_adding_priors():
-    post = PosteriorDensity()
+    post = LogJointDensity()
     print(post.value())
     alpha = ChoiceParameter(torch.randn(1).uniform_())
     beta = ChoiceParameter(torch.randn(1).uniform_())
@@ -28,20 +33,24 @@ def test_adding_priors():
     return
 
 
-def likelihood(Vlist, y):
-
-    return
+def likelihood(param_slices, data: ChoiceDataset):
+    utilities = []
+    for dataset, (name, beta) in zip(data.alternatives, param_slices.items()):
+        V = ChoiceUtility(dataset.features, beta, dataset.has_asc)
+        utilities.append(V.value())
+    logits = torch.stack(utilities, dim=1)
+    ll = Categorical(logits=logits).log_prob(data.choices).sum()
+    return ll
 
 
 def test_adding_likelihood():
 
-    post = PosteriorDensity()
-    print(post.value())
     sm_train = ChoiceDataset(
         filepath="data/swissmetro.dat",
         choice_col="CHOICE",
         feature_cols=["AGE", "INCOME", "TRAIN_TT", "TRAIN_CO", "TRAIN_HE"],
         avail_cols=["TRAIN_AV"],
+        has_asc=True,
     )
 
     sm_car = ChoiceDataset(
@@ -49,6 +58,7 @@ def test_adding_likelihood():
         choice_col="CHOICE",
         feature_cols=["CAR_TT", "CAR_CO"],
         avail_cols=["CAR_AV"],
+        has_asc=False,
     )
 
     sm_sm = ChoiceDataset(
@@ -56,59 +66,67 @@ def test_adding_likelihood():
         choice_col="CHOICE",
         feature_cols=["AGE", "INCOME", "SM_TT", "SM_CO", "SM_HE"],
         avail_cols=["SM_AV"],
+        has_asc=True,
     )
 
-    Xtrain = sm_train.features
-    Atrain = sm_train.availability
-    Xcar = sm_car.features
-    Acar = sm_car.availability
-    Xsm = sm_sm.features
-    Asm = sm_sm.availability
-    y = sm_train.choices
-
-    # parameters
-    beta_train = ChoiceParameter(
-        torch.randn(Xtrain.shape[1] + 1).uniform_()  # +1 for ASC
-    )
-    beta_car = ChoiceParameter(torch.randn(Xcar.shape[1]).uniform_())
-    beta_sm = ChoiceParameter(
-        torch.randn(Xtrain.shape[1] + 1).uniform_()  # +1 for ASC
-    )
-
-    print("Adding train priors")
+    beta_train = ChoiceParameter(dim=sm_train.features.size(1) + 1, name="beta_train")
     beta_train.set_prior(
-        Normal(torch.zeros(Xtrain.size(1) + 1), torch.ones(Xtrain.size(1) + 1))
+        Normal(torch.zeros(beta_train.dim), torch.ones(beta_train.dim))
     )
-    post.add(beta_train.eval_prior(beta_train).sum())
-    print(post.value())
+    beta_car = ChoiceParameter(dim=sm_car.features.size(1), name="beta_car")
+    beta_car.set_prior(Normal(torch.zeros(beta_car.dim), torch.ones(beta_car.dim)))
+    beta_sm = ChoiceParameter(dim=sm_sm.features.size(1) + 1, name="beta_sm")
+    beta_sm.set_prior(Normal(torch.zeros(beta_sm.dim), torch.ones(beta_sm.dim)))
 
-    print("adding car priors")
-    beta_car.set_prior(Normal(torch.zeros(Xcar.size(1)), torch.ones(Xcar.size(1))))
-    post.add(beta_car.eval_prior(beta_car).sum())
-    print(post.value())
+    log_joint = ChoiceModelLogJoint(
+        data=MultinomialChoiceData(
+            alternatives=[sm_train, sm_car, sm_sm], choices=sm_train.choices
+        ),
+        params=[beta_train, beta_car, beta_sm],
+        likelihood_fn=likelihood,
+    )
 
-    print("adding sm priors")
-    beta_sm.set_prior(Normal(torch.zeros(Xsm.size(1) + 1), torch.ones(Xsm.size(1) + 1)))
-    post.add(beta_sm.eval_prior(beta_sm).sum())
-    print(post.value())
+    param_list = [beta_train, beta_car, beta_sm]
 
-    Xtrain_aug = torch.cat((torch.ones(Xtrain.size(0), 1), Xtrain), 1)
-    Xsm_aug = torch.cat((torch.ones(Xsm.size(0), 1), Xsm), 1)
-
-    V_train = ChoiceUtility(Xtrain_aug, beta_train)
-    V_sm = ChoiceUtility(Xsm_aug, beta_sm)
-    V_car = ChoiceUtility(Xcar, beta_car)
-
-    logits = torch.stack([V_train.value(), V_sm.value(), V_car.value()], dim=1)
-
-    print("adding likelihood")
-    likelihood = Categorical(logits=logits).log_prob(y).sum()
-
-    post.add(likelihood)
-
-    print(post.value())
-
-    return
+    return log_joint, param_list
 
 
-test_adding_likelihood()
+def swissmetro():
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    log_joint, param_list = test_adding_likelihood()
+    param_dim = sum(p.dim for p in param_list)
+    nfvi = NFVI(
+        flow=PlanarFlow(dim=param_dim, K=12), log_joint=log_joint, param_dim=param_dim
+    )
+
+    # train
+    lr = 1e-3
+    n_steps = 2000
+    optimizer = torch.optim.Adam(params=nfvi.parameters(), lr=lr)
+    elbo_list = []
+    for i in range(n_steps):
+        loss = -nfvi.elbo(n_samples=1)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        elbo_list.append(-loss.item())
+        if i % 10 == 0:
+            print(f"iter {i:4d}  ELBO = {-loss.item():.2f}")
+
+    with torch.no_grad():
+        z0 = nfvi.base.rsample((2000,))
+        z_K, _ = nfvi.flow(z0)
+        posterior_mean = z_K.mean(dim=0)
+
+    offset = 0
+    for p in param_list:
+        print(f"{p.name}: {posterior_mean[offset : offset + p.dim]}")
+        offset += p.dim
+
+    plt.plot(np.arange(n_steps), elbo_list)
+    plt.savefig("nfvi_elbo.png")
+
+
+swissmetro()

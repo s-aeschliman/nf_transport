@@ -1,5 +1,8 @@
+from dataclasses import dataclass
+
 import pandas as pd
 import torch
+from torch import Tensor
 from torch.utils.data import Dataset
 
 
@@ -12,7 +15,9 @@ class ChoiceDataset(Dataset):
         3. the choices
     """
 
-    def __init__(self, feature_cols, choice_col, avail_cols, filepath: str) -> None:
+    def __init__(
+        self, feature_cols, choice_col, avail_cols, filepath: str, has_asc: bool = True
+    ) -> None:
         super().__init__()
         if ".dat" in filepath:
             sepstring = "\t"
@@ -24,9 +29,16 @@ class ChoiceDataset(Dataset):
         self.features = torch.tensor(df[feature_cols].values, dtype=torch.float32)
         self.choices = torch.tensor(df[choice_col].values, dtype=torch.long) - 1
         self.availability = torch.tensor(df[avail_cols].values, dtype=torch.float32)
+        self.has_asc = has_asc
 
     def __len__(self):
         return len(self.choices)
 
     def __getitem__(self, idx):
         return self.features, self.availability, self.choices
+
+
+@dataclass
+class MultinomialChoiceData:
+    alternatives: list[ChoiceDataset]
+    choices: Tensor
