@@ -1,7 +1,5 @@
+import numpy as np
 import torch
-from database_process import ChoiceDataset
-from logpd import LogJointDensity
-from parameter import ChoiceParameter
 from torch.distributions import (
     Bernoulli,
     Categorical,
@@ -10,47 +8,41 @@ from torch.distributions import (
     Normal,
     Uniform,
 )
-from torch.optim import optimizer
-from torch.utils.data import DataLoader, Dataset
-from utility import ChoiceUtility
+from torch.utils.data import Dataset
 
-from nf_transport.choice_models.database_process import MultinomialChoiceData
-from nf_transport.choice_models.logpd import ChoiceModelLogJoint
+from nf_transport.choice_models.database_process import (
+    ChoiceDataset,
+    MultinomialChoiceData,
+)
+from nf_transport.choice_models.logpd import ChoiceModelLogJoint, LogJointDensity
 from nf_transport.choice_models.nfvi import NFVI, PlanarFlow, PlanarTransform
-
-
-def test_adding_priors():
-    post = LogJointDensity()
-    print(post.value())
-    alpha = ChoiceParameter(torch.randn(1).uniform_())
-    beta = ChoiceParameter(torch.randn(1).uniform_())
-    alpha.set_prior(Normal(torch.tensor([0.0]), torch.tensor([1.0])))
-    post.add(alpha.eval_prior(alpha))
-    print(post.value())
-    beta.set_prior(Normal(torch.tensor([0.0]), torch.tensor([3.0])))
-    post.add(alpha.eval_prior(alpha))
-    print(post.value())
-    return
+from nf_transport.choice_models.parameter import ChoiceParameter
+from nf_transport.choice_models.utility import ChoiceUtility
 
 
 def likelihood(param_slices, data: ChoiceDataset):
     utilities = []
+    availabilities = []
     for dataset, (name, beta) in zip(data.alternatives, param_slices.items()):
         V = ChoiceUtility(dataset.features, beta, dataset.has_asc)
         utilities.append(V.value())
-    logits = torch.stack(utilities, dim=1)
+        availabilities.append(dataset.availability.all(dim=-1))  # [N]
+    logits = torch.stack(utilities, dim=1)  # [N, J]
+    avail = torch.stack(availabilities, dim=1)  # [N, J]
+    logits = logits.masked_fill(~avail, float("-inf"))
     ll = Categorical(logits=logits).log_prob(data.choices).sum()
     return ll
 
 
-def test_adding_likelihood():
+def swissmetro_likelihood():
 
     sm_train = ChoiceDataset(
         filepath="data/swissmetro.dat",
         choice_col="CHOICE",
-        feature_cols=["AGE", "INCOME", "TRAIN_TT", "TRAIN_CO", "TRAIN_HE"],
+        feature_cols=["TRAIN_TT", "TRAIN_CO"],
         avail_cols=["TRAIN_AV"],
         has_asc=True,
+        scale=True,
     )
 
     sm_car = ChoiceDataset(
@@ -58,35 +50,37 @@ def test_adding_likelihood():
         choice_col="CHOICE",
         feature_cols=["CAR_TT", "CAR_CO"],
         avail_cols=["CAR_AV"],
-        has_asc=False,
+        has_asc=True,
+        scale=True,
     )
 
     sm_sm = ChoiceDataset(
         filepath="data/swissmetro.dat",
         choice_col="CHOICE",
-        feature_cols=["AGE", "INCOME", "SM_TT", "SM_CO", "SM_HE"],
+        feature_cols=["SM_TT", "SM_CO"],
         avail_cols=["SM_AV"],
-        has_asc=True,
+        has_asc=False,
+        scale=True,
     )
 
     beta_train = ChoiceParameter(dim=sm_train.features.size(1) + 1, name="beta_train")
     beta_train.set_prior(
         Normal(torch.zeros(beta_train.dim), torch.ones(beta_train.dim))
     )
-    beta_car = ChoiceParameter(dim=sm_car.features.size(1), name="beta_car")
+    beta_car = ChoiceParameter(dim=sm_car.features.size(1) + 1, name="beta_car")
     beta_car.set_prior(Normal(torch.zeros(beta_car.dim), torch.ones(beta_car.dim)))
-    beta_sm = ChoiceParameter(dim=sm_sm.features.size(1) + 1, name="beta_sm")
+    beta_sm = ChoiceParameter(dim=sm_sm.features.size(1), name="beta_sm")
     beta_sm.set_prior(Normal(torch.zeros(beta_sm.dim), torch.ones(beta_sm.dim)))
 
     log_joint = ChoiceModelLogJoint(
         data=MultinomialChoiceData(
-            alternatives=[sm_train, sm_car, sm_sm], choices=sm_train.choices
+            alternatives=[sm_train, sm_sm, sm_car], choices=sm_train.choices
         ),
-        params=[beta_train, beta_car, beta_sm],
+        params=[beta_train, beta_sm, beta_car],
         likelihood_fn=likelihood,
     )
 
-    param_list = [beta_train, beta_car, beta_sm]
+    param_list = [beta_train, beta_sm, beta_car]
 
     return log_joint, param_list
 
@@ -95,7 +89,7 @@ def swissmetro():
     import matplotlib.pyplot as plt
     import numpy as np
 
-    log_joint, param_list = test_adding_likelihood()
+    log_joint, param_list = swissmetro_likelihood()
     param_dim = sum(p.dim for p in param_list)
     nfvi = NFVI(
         flow=PlanarFlow(dim=param_dim, K=12), log_joint=log_joint, param_dim=param_dim
@@ -120,13 +114,18 @@ def swissmetro():
         z_K, _ = nfvi.flow(z0)
         posterior_mean = z_K.mean(dim=0)
 
+    posterior = {}
     offset = 0
     for p in param_list:
         print(f"{p.name}: {posterior_mean[offset : offset + p.dim]}")
+        for d in range(p.dim):
+            posterior[f"{p.name}[{d}]"] = z_K[:, offset + d]
         offset += p.dim
 
-    plt.plot(np.arange(n_steps), elbo_list)
-    plt.savefig("nfvi_elbo.png")
+    np.savez(
+        "estimates/sm_posterior.npz",
+        **{k: v.numpy()[np.newaxis, :] for k, v in posterior.items()},
+    )
 
 
 swissmetro()
