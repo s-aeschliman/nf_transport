@@ -97,3 +97,18 @@ class GenericFlow(nn.Module):
             log_det_J += layer.log_det_J(z) # type: ignore
             z = layer(z) # type: ignore
         return z, log_det_J
+    
+class AffineCoupling(nn.Module):
+    def __init__(self, dim: int, hdim: int, mask):
+        super().__init__()
+        self.dim = dim
+        self.register_buffer("mask", mask)
+        self.s = nn.Sequential(
+            nn.Linear(dim, hdim),
+            nn.ReLU(),
+            nn.Linear(hdim, hdim),
+            nn.ReLU(),
+            nn.Linear(hdim, hdim),
+            nn.ReLU(),
+            nn.Linear(hdim, dim)
+        )
