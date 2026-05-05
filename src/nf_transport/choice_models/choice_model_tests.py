@@ -8,33 +8,33 @@ from torch.distributions import (
     Normal,
     Uniform,
 )
-from torch.utils.data import Dataset
+
 
 from nf_transport.choice_models.database_process import (
     ChoiceDataset,
     MultinomialChoiceData,
 )
-from nf_transport.choice_models.logpd import ChoiceModelLogJoint, LogJointDensity
-from nf_transport.choice_models.nfvi import NFVI, PlanarFlow, PlanarTransform
+from nf_transport.choice_models.logpd import ChoiceModelLogJoint
+from nf_transport.choice_models.nfvi import NFVI, GenericFlow, PlanarTransform
 from nf_transport.choice_models.parameter import ChoiceParameter
 from nf_transport.choice_models.utility import ChoiceUtility
 
 
-def likelihood(param_slices, data: ChoiceDataset):
+def likelihood(param_slices, data: MultinomialChoiceData):
     utilities = []
     availabilities = []
     for dataset, (name, beta) in zip(data.alternatives, param_slices.items()):
         V = ChoiceUtility(dataset.features, beta, dataset.has_asc)
         utilities.append(V.value())
-        availabilities.append(dataset.availability.all(dim=-1))  # [N]
-    logits = torch.stack(utilities, dim=1)  # [N, J]
-    avail = torch.stack(availabilities, dim=1)  # [N, J]
+        availabilities.append(dataset.availability.all(dim=-1))
+    logits = torch.stack(utilities, dim=-1)  # [Base_samples, N, J]
+    avail = torch.stack(availabilities, dim=-1)  # [N, J]
     logits = logits.masked_fill(~avail, float("-inf"))
-    ll = Categorical(logits=logits).log_prob(data.choices).sum()
+    ll = Categorical(logits=logits).log_prob(data.choices).sum(dim=1)
     return ll
 
 
-def swissmetro_likelihood():
+def swissmetro_likelihood(base_samples: int = 1):
 
     sm_train = ChoiceDataset(
         filepath="data/swissmetro.dat",
@@ -74,10 +74,12 @@ def swissmetro_likelihood():
 
     log_joint = ChoiceModelLogJoint(
         data=MultinomialChoiceData(
-            alternatives=[sm_train, sm_sm, sm_car], choices=sm_train.choices
+            alternatives=[sm_train, sm_sm, sm_car], 
+            choices=sm_train.choices
         ),
         params=[beta_train, beta_sm, beta_car],
         likelihood_fn=likelihood,
+        base_samples=base_samples
     )
 
     param_list = [beta_train, beta_sm, beta_car]
@@ -86,13 +88,15 @@ def swissmetro_likelihood():
 
 
 def swissmetro():
-    import matplotlib.pyplot as plt
-    import numpy as np
 
-    log_joint, param_list = swissmetro_likelihood()
+    base_samples = 100
+
+    log_joint, param_list = swissmetro_likelihood(base_samples=base_samples)
     param_dim = sum(p.dim for p in param_list)
     nfvi = NFVI(
-        flow=PlanarFlow(dim=param_dim, K=12), log_joint=log_joint, param_dim=param_dim
+        flow=GenericFlow(transform=PlanarTransform, dim=param_dim, K=12), 
+        log_joint=log_joint, 
+        param_dim=param_dim
     )
 
     # train
@@ -101,12 +105,12 @@ def swissmetro():
     optimizer = torch.optim.Adam(params=nfvi.parameters(), lr=lr)
     elbo_list = []
     for i in range(n_steps):
-        loss = -nfvi.elbo(n_samples=1)
+        loss = -nfvi.elbo(n_samples=base_samples)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         elbo_list.append(-loss.item())
-        if i % 10 == 0:
+        if i % 100 == 0:
             print(f"iter {i:4d}  ELBO = {-loss.item():.2f}")
 
     with torch.no_grad():
@@ -126,6 +130,5 @@ def swissmetro():
         "estimates/sm_posterior.npz",
         **{k: v.numpy()[np.newaxis, :] for k, v in posterior.items()},
     )
-
 
 swissmetro()

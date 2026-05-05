@@ -15,7 +15,7 @@ class ChoiceUtility:
                 (torch.ones(predictors.size(0), 1), predictors), dim=1
             )
 
-        self.v = torch.matmul(predictors, params.squeeze(0))
+        self.v = torch.matmul(params, predictors.T)
 
     def value(self):
         return self.v

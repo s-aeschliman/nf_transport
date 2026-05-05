@@ -1,6 +1,6 @@
 import torch
-from logpd import LogJointDensity
-from parameter import ChoiceParameter
+from nf_transport.choice_models.logpd import LogJointDensity
+from nf_transport.choice_models.parameter import ChoiceParameter
 from torch import Tensor, nn
 from torch.distributions import MultivariateNormal
 from torch.utils.data.dataset import TensorDataset
@@ -80,7 +80,20 @@ class PlanarFlow(nn.Module):
         log_det_J = 0
 
         for layer in self.layers:
-            log_det_J += layer.log_det_J(z)
-            z = layer(z)
+            log_det_J += layer.log_det_J(z) # type: ignore
+            z = layer(z) # type: ignore
 
+        return z, log_det_J
+
+class GenericFlow(nn.Module):
+    def __init__(self, transform: type[nn.Module], K: int, dim: int):
+        super().__init__()
+        self.layers = nn.ModuleList([transform(dim) for _ in range(K)])
+        self.model = nn.Sequential(*self.layers)
+
+    def forward(self, z: Tensor) -> tuple[Tensor, float]:
+        log_det_J = 0
+        for layer in self.layers:
+            log_det_J += layer.log_det_J(z) # type: ignore
+            z = layer(z) # type: ignore
         return z, log_det_J
