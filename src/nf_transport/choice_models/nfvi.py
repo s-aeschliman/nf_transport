@@ -18,6 +18,8 @@ class NFVI(nn.Module):
         z, sum_log_det_J = self.flow(z0)
         return (self.log_joint(z) + sum_log_det_J - self.base.log_prob(z0)).mean()
 
+    def __str__(self):
+        return self.flow.__str__()
 
 class PlanarTransform(nn.Module):
     # borrowed, for now, from https://github.com/e-hulten/planar-flows/blob/master/planar_transform.py
@@ -85,6 +87,9 @@ class PlanarFlow(nn.Module):
 
         return z, log_det_J
 
+    def __str__(self):
+        return "planar"
+
 class GenericFlow(nn.Module):
     def __init__(self, transform: type[nn.Module], K: int, dim: int):
         super().__init__()
@@ -99,16 +104,51 @@ class GenericFlow(nn.Module):
         return z, log_det_J
     
 class AffineCoupling(nn.Module):
+    mask: Tensor
+
     def __init__(self, dim: int, hdim: int, mask):
         super().__init__()
         self.dim = dim
         self.register_buffer("mask", mask)
-        self.s = nn.Sequential(
+        self.network = nn.Sequential(
             nn.Linear(dim, hdim),
             nn.ReLU(),
             nn.Linear(hdim, hdim),
             nn.ReLU(),
             nn.Linear(hdim, hdim),
             nn.ReLU(),
-            nn.Linear(hdim, dim)
+            nn.Linear(hdim, 2*dim) # 2 * dim to essentially produce 2 heads, one for s and one for t
         )
+
+    def forward(self, z: Tensor) -> tuple[Tensor, Tensor]:
+        z_m = z * self.mask
+        h = self.network(z_m)
+        s, t = h.chunk(2, dim=-1)
+        s = torch.tanh(s) * (1 - self.mask)
+        t = t * (1 - self.mask)
+        y = z_m + (1 - self.mask) * (z * torch.exp(s) + t)
+        log_det_J = s.sum(dim=-1)
+        return y, log_det_J
+    
+class RealNVPFlow(nn.Module):
+    def __init__(self, dim: int, hdim: int, mask, K: int):
+        super().__init__()
+        temp_mask = mask
+        coupling_layers = []
+        for _ in range(K):
+            layer = AffineCoupling(dim=dim, hdim=hdim, mask=temp_mask)
+            temp_mask = 1 - temp_mask
+            coupling_layers.append(layer)
+                            
+        self.layers = nn.ModuleList(coupling_layers)
+    
+    def forward(self, z: Tensor) -> tuple[Tensor, float]:
+        log_det_J = 0
+        for layer in self.layers:
+            z, ldj = layer(z)
+            log_det_J += ldj
+        
+        return z, log_det_J
+
+    def __str__(self):
+        return "realNVP"
