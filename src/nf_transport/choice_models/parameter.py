@@ -13,4 +13,4 @@ class ChoiceParameter:
         self.prior = dist
 
     def log_prior(self, x: Tensor) -> Tensor:
-        return self.prior.log_prob(x).sum()
+        return self.prior.log_prob(x).sum(dim=-1)

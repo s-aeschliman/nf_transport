@@ -23,7 +23,7 @@ class ChoiceDataset(Dataset):
         filepath: str,
         has_asc: bool = True,
         scale: bool = False,
-    ) -> None:
+    ):
         super().__init__()
         if ".dat" in filepath:
             sepstring = "\t"
@@ -33,13 +33,15 @@ class ChoiceDataset(Dataset):
         df = pd.read_csv(filepath, sep=sepstring)
         df = df[df[choice_col] > 0]
 
-        # scale features
+        
 
         self.features = torch.tensor(df[feature_cols].values, dtype=torch.float32)
         self.choices = torch.tensor(df[choice_col].values, dtype=torch.long) - 1
         self.availability = torch.tensor(df[avail_cols].values, dtype=torch.float32)
         self.has_asc = has_asc
-
+        self.feature_names = feature_cols
+        
+        # scale features
         self.feature_mean = self.features.mean(dim=0)
         self.feature_std = self.features.std(dim=0).clamp(min=1e-8)
         if scale:
@@ -56,3 +58,4 @@ class ChoiceDataset(Dataset):
 class MultinomialChoiceData:
     alternatives: list[ChoiceDataset]
     choices: Tensor
+    feature_mapping: dict

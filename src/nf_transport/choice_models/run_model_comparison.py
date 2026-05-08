@@ -23,12 +23,25 @@ from nf_transport.choice_models.utility import ChoiceUtility
 
 
 def likelihood(param_slices, data: MultinomialChoiceData):
+    feature_mapping = data.feature_mapping
     utilities = []
     availabilities = []
-    for dataset, (name, beta) in zip(data.alternatives, param_slices.items()):
-        V = ChoiceUtility(dataset.features, beta, dataset.has_asc)
+
+    asc_names = ["asc_train", None, "asc_car"]
+
+    for i, dataset in enumerate(data.alternatives):
+        V = ChoiceUtility(
+            features=dataset.features, 
+            feature_names=dataset.feature_names, 
+            param_slices=param_slices,
+            feature_mapping=feature_mapping,
+            asc_name=asc_names[i]
+        )
+
         utilities.append(V.value())
         availabilities.append(dataset.availability.all(dim=-1))
+
+
     logits = torch.stack(utilities, dim=-1)  # [Base_samples, N, J]
     avail = torch.stack(availabilities, dim=-1)  # [N, J]
     logits = logits.masked_fill(~avail, float("-inf"))
@@ -65,26 +78,38 @@ def swissmetro_likelihood(base_samples: int = 1):
         scale=True,
     )
 
-    beta_train = ChoiceParameter(dim=sm_train.features.size(1) + 1, name="beta_train")
-    beta_train.set_prior(
-        Normal(torch.zeros(beta_train.dim), torch.ones(beta_train.dim))
-    )
-    beta_car = ChoiceParameter(dim=sm_car.features.size(1) + 1, name="beta_car")
-    beta_car.set_prior(Normal(torch.zeros(beta_car.dim), torch.ones(beta_car.dim)))
-    beta_sm = ChoiceParameter(dim=sm_sm.features.size(1), name="beta_sm")
-    beta_sm.set_prior(Normal(torch.zeros(beta_sm.dim), torch.ones(beta_sm.dim)))
+    # define params
+    asc_train = ChoiceParameter(dim=1, name="asc_train")
+    asc_car = ChoiceParameter(dim=1, name="asc_car")
+    b_time = ChoiceParameter(dim=1, name="b_time")
+    b_cost = ChoiceParameter(dim=1, name="b_cost")
+
+    for b in [b_time, b_cost]:
+        b.set_prior(Normal(torch.tensor([-1.5]), torch.tensor([1.0])))
+
+    param_list = [asc_train, asc_car, b_time, b_cost]
+
+    # map params to predictors
+    feature_mapping = {
+        "TRAIN_TT": "b_time",
+        "CAR_TT": "b_time",
+        "SM_TT": "b_time",
+        "TRAIN_CO": "b_cost",
+        "SM_CO": "b_cost",
+        "CAR_CO": "b_cost",
+    }
 
     log_joint = ChoiceModelLogJoint(
         data=MultinomialChoiceData(
             alternatives=[sm_train, sm_sm, sm_car], 
-            choices=sm_train.choices
+            choices=sm_train.choices,
+            feature_mapping=feature_mapping
         ),
-        params=[beta_train, beta_sm, beta_car],
+        params=param_list,
         likelihood_fn=likelihood,
         base_samples=base_samples
     )
 
-    param_list = [beta_train, beta_sm, beta_car]
 
     return log_joint, param_list
 
@@ -153,7 +178,7 @@ def swissmetro():
         )
 
     plt.plot(np.arange(n_steps), elbos["realNVP"], "b:", np.arange(n_steps), elbos["planar"], "r-.", lw=0.5)
-    plt.ylim((-30000, max(elbos["realNVP"]) + 500))
+    plt.ylim((-30000, max(elbos["realNVP"]) + 300))
     plt.ylabel("ELBO")
     plt.xlabel("Training step")
     plt.legend(("Affine Coupling", "Planar Flow"), loc="lower center")

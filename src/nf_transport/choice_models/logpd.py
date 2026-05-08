@@ -17,7 +17,7 @@ class LogJointDensity:
 
 
 class ChoiceModelLogJoint:
-    def __init__(self, data, params: list[ChoiceParameter], likelihood_fn, base_samples: int = 1) -> None:
+    def __init__(self, data, params: list[ChoiceParameter], likelihood_fn, base_samples: int = 1):
         self.data = data
         self.parameters = params
         self.likelihood_fn = likelihood_fn
