@@ -20,6 +20,7 @@ class ChoiceDataset(Dataset):
         feature_cols,
         choice_col,
         avail_cols,
+        id_col,
         filepath: str,
         has_asc: bool = True,
         scale: bool = False,
@@ -40,7 +41,9 @@ class ChoiceDataset(Dataset):
         self.availability = torch.tensor(df[avail_cols].values, dtype=torch.float32)
         self.has_asc = has_asc
         self.feature_names = feature_cols
-        
+        self.id_col = id_col
+        self.num_ind = len(df[id_col].unique())
+
         # scale features
         self.feature_mean = self.features.mean(dim=0)
         self.feature_std = self.features.std(dim=0).clamp(min=1e-8)

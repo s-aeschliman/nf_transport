@@ -56,6 +56,7 @@ def swissmetro_likelihood(base_samples: int = 1):
         choice_col="CHOICE",
         feature_cols=["TRAIN_TT", "TRAIN_CO"],
         avail_cols=["TRAIN_AV"],
+        id_col = "ID",
         has_asc=True,
         scale=True,
     )
@@ -65,6 +66,7 @@ def swissmetro_likelihood(base_samples: int = 1):
         choice_col="CHOICE",
         feature_cols=["CAR_TT", "CAR_CO"],
         avail_cols=["CAR_AV"],
+        id_col = "ID",
         has_asc=True,
         scale=True,
     )
@@ -74,6 +76,7 @@ def swissmetro_likelihood(base_samples: int = 1):
         choice_col="CHOICE",
         feature_cols=["SM_TT", "SM_CO"],
         avail_cols=["SM_AV"],
+        id_col = "ID",
         has_asc=False,
         scale=True,
     )
@@ -116,7 +119,7 @@ def swissmetro_likelihood(base_samples: int = 1):
 
 def swissmetro():
 
-    base_samples = 1
+    base_samples = 8
 
     log_joint, param_list = swissmetro_likelihood(base_samples=base_samples)
     param_dim = sum(p.dim for p in param_list)
