@@ -1,5 +1,5 @@
 [project]
-name = "nf-transport"
+name = "nf_transport"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
@@ -7,8 +7,19 @@ authors = [
     { name = "Spencer Aeschliman", email = "spenceraeschliman2026@u.northwestern.edu" }
 ]
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "arviz[matplotlib,preview,zarr]>=0.23.4",
+    "matplotlib>=3.10.9",
+    "numpy>=2.4.4",
+    "pandas>=3.0.2",
+    "torch>=2.11.0",
+]
 
 [build-system]
 requires = ["uv_build>=0.11.7,<0.12.0"]
 build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "ruff>=0.15.12",
+]
